@@ -1,0 +1,35 @@
+{
+  "config": {
+    "name": "BackendLand",
+    "version": "1.0.0",
+    "message": "Config padrão do BackendLand",
+    "maintenance": false
+  },
+  "users": [
+    {
+      "id": "user_sample_1",
+      "deviceId": "device_sample_1",
+      "country": "BR",
+      "username": "Veronica",
+      "crowns": 10,
+      "gems": 5,
+      "trophys": 2,
+      "skillRating": 1200,
+      "balances": [
+        {
+          "name": "gems",
+          "amount": 5
+        },
+        {
+          "name": "coins",
+          "amount": 100
+        }
+      ],
+      "banned": false,
+      "createdAt": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "bans": [
+    "gustavo junuior juju"
+  ]
+}
