@@ -1,10 +1,5 @@
-// server.js
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const { Low } = require('lowdb');
-const { JSONFile } = require('lowdb/node');
-const { nanoid } = require('nanoid');
 const fs = require('fs');
 const path = require('path');
 
@@ -13,167 +8,96 @@ const DB_FILE = path.join(__dirname, 'db.json');
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Inicializa lowdb
-const adapter = new JSONFile(DB_FILE);
-const db = new Low(adapter);
-
-async function initDb() {
-  await db.read();
-  db.data = db.data || { config: {}, users: [], bans: [] };
-
-  // Valores padrão (só são aplicados se estiver vazio)
-  db.data.config = db.data.config || {
-    name: "BackendLand",
-    version: "1.0.0",
-    message: "Backend de teste para mod",
-    maintenance: false
-  };
-
-  // garante estrutura
-  db.data.users = db.data.users || [];
-  db.data.bans = db.data.bans || [];
-
-  await db.write();
+function readDb() {
+  if (!fs.existsSync(DB_FILE)) {
+    const empty = { users: [], bans: [] };
+    fs.writeFileSync(DB_FILE, JSON.stringify(empty, null, 2));
+    return empty;
+  }
+  return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
 }
 
-// Utilitários
-async function findUserByDevice(deviceId) {
-  await db.read();
-  return db.data.users.find(u => u.deviceId === deviceId);
+function writeDb(data) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-async function isBanned(username) {
-  await db.read();
-  if (!username) return false;
-  return db.data.bans.some(b => b.toLowerCase() === username.toLowerCase());
-}
-
-// Endpoints
-
-// Config estático (GET /config.json)
-app.get('/config.json', async (req, res) => {
-  await db.read();
-  res.json(db.data.config);
+app.get('/config.json', (req, res) => {
+  res.json({ name: "MyStumbleMod", version: "1.0.0", maintenance: false });
 });
 
-// Endpoint de login que o mod espera (POST /user/login/)
-app.post('/user/login/', async (req, res) => {
+app.post('/user/login/', (req, res) => {
   try {
-    await db.read();
-    const { deviceId, country, hash } = req.body || {};
+    const { deviceId, country } = req.body || {};
+    if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
 
-    // validações básicas
-    if (!deviceId) {
-      return res.status(400).json({ error: 'deviceId required' });
-    }
-
-    // ---------- Autenticação simples ----------
-    const acceptedHash = process.env.SERVER_HASH || 'VinAW5ATPxIZS3fe9OEqirN35SyOil4zMTgiHFAOfKkkamiTV0EqKjXibc9ZydTHAsSVBMWww71bnGieEDfB1jBT3xf9JnWZAr9W5cvDj2IUtBk0yOUEh0nMGsLiF8G7';
-
-    // Busca usuário por deviceId
-    let user = db.data.users.find(u => u.deviceId === deviceId);
+    const db = readDb();
+    let user = db.users.find(u => u.deviceId === deviceId);
 
     if (!user) {
-      // cria novo usuário default
       user = {
-        id: nanoid(),
+        id: Math.floor(Math.random() * 999999),
         deviceId,
-        country: country || 'BR',
-        username: `Player_${deviceId.slice(0,6)}`,
+        country: country || 'US',
+        username: 'Player_' + deviceId.slice(0, 6),
         crowns: 0,
-        gems: 0,
-        // NOTE: mod espera "trophys" (erro de ortografia comum) — manter chave
+        gems: 9999,
         trophys: 0,
-        skillRating: 0,
-        balances: [
-          { name: 'gems', amount: 0 },
-          { name: 'coins', amount: 0 }
-        ],
-        banned: false,
-        createdAt: new Date().toISOString()
+        coins: 9999,
+        banned: false
       };
-      db.data.users.push(user);
-      await db.write();
-      console.log(`[Backend] Novo usuário criado: ${user.username} (${user.deviceId})`);
+      db.users.push(user);
+      writeDb(db);
+      console.log('[Server] New user: ' + user.username);
     }
 
-    // checagem de ban local
-    if (await isBanned(user.username) || user.banned) {
-      console.log(`[Backend] Login rejeitado: usuário banido => ${user.username}`);
-      return res.json({
-        authorized: false,
-        banned: true,
-        message: 'User is banned',
-        username: user.username
-      });
+    if (db.bans.includes(user.username) || user.banned) {
+      return res.json({ banned: true, username: user.username });
     }
 
-    // forma de retorno compatível com o mod
-    const responsePayload = {
-      authorized: hash === acceptedHash,
+    return res.json({
+      authorized: true,
       banned: false,
       username: user.username,
       crowns: user.crowns,
       gems: user.gems,
-      coins: user.balances.find(b => b.name === 'coins')?.amount || 0,
+      coins: user.coins,
       trophys: user.trophys,
-      skillRating: user.skillRating,
-      balances: user.balances,
-      message: hash === acceptedHash ? 'Authorized' : 'UnauthorizedHash'
-    };
-
-    console.log(`[Backend] Login request: device=${deviceId}, username=${user.username}, authorized=${responsePayload.authorized}`);
-    return res.json(responsePayload);
+      id: user.id,
+      balances: [
+        { name: 'gems', amount: user.gems },
+        { name: 'coins', amount: user.coins }
+      ]
+    });
   } catch (err) {
-    console.error('[Backend] Erro em /user/login/:', err);
+    console.error('[Server] Error:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Endpoint admin para ban (POST /admin/ban) - simples e inseguro, só pra dev/test
-// body: { username: "nome", action: "ban" | "unban" }
-app.post('/admin/ban', async (req, res) => {
-  try {
-    await db.read();
-    const { username, action } = req.body || {};
-    if (!username || !action) return res.status(400).json({ error: 'username and action required' });
-
-    if (action === 'ban') {
-      if (!db.data.bans.includes(username)) db.data.bans.push(username);
-      const u = db.data.users.find(x => x.username === username);
-      if (u) u.banned = true;
-      await db.write();
-      console.log(`[Backend] Usuario banido: ${username}`);
-      return res.json({ ok: true, banned: true });
-    } else if (action === 'unban') {
-      db.data.bans = db.data.bans.filter(b => b.toLowerCase() !== username.toLowerCase());
-      const u = db.data.users.find(x => x.username === username);
-      if (u) u.banned = false;
-      await db.write();
-      console.log(`[Backend] Usuario desbanido: ${username}`);
-      return res.json({ ok: true, banned: false });
-    } else {
-      return res.status(400).json({ error: 'unknown action' });
-    }
-  } catch (err) {
-    console.error('[Backend] Erro em /admin/ban:', err);
-    return res.status(500).json({ error: 'internal_error' });
+app.post('/admin/ban', (req, res) => {
+  const { username, action } = req.body || {};
+  if (!username || !action) return res.status(400).json({ error: 'missing fields' });
+  const db = readDb();
+  if (action === 'ban') {
+    if (!db.bans.includes(username)) db.bans.push(username);
+    const u = db.users.find(x => x.username === username);
+    if (u) u.banned = true;
+  } else if (action === 'unban') {
+    db.bans = db.bans.filter(b => b !== username);
+    const u = db.users.find(x => x.username === username);
+    if (u) u.banned = false;
   }
+  writeDb(db);
+  return res.json({ ok: true });
 });
 
-// Endpoint para ver users (GET /admin/users) - só pra debug
-app.get('/admin/users', async (req, res) => {
-  await db.read();
-  res.json(db.data.users);
+app.get('/admin/users', (req, res) => {
+  const db = readDb();
+  res.json(db.users);
 });
 
-app.listen(PORT, async () => {
-  if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ config: {}, users: [], bans: [] }, null, 2));
-  }
-  await initDb();
-  console.log(`[Backend] BackendLand iniciado na porta ${PORT}`);
-  console.log(`[Backend] GET /config.json  POST /user/login/  POST /admin/ban`);
+app.listen(PORT, () => {
+  console.log('[Server] Running on port ' + PORT);
 });
